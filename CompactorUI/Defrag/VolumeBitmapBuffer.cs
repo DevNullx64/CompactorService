@@ -23,7 +23,7 @@ namespace CompactorUI.Defrag
         public VolumeBitmapBuffer(DriveInfo volume)
         {
             Volume = volume;
-            hVolume = kernel32.CreateFile("\\\\.\\" + Volume.Name, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, kernel32.CreateFileFlag.NONE);
+            hVolume = Kernel32.CreateFile("\\\\.\\" + Volume.Name, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, Kernel32.CreateFileFlag.NONE);
             if (hVolume.IsInvalid)
                 throw new Win32Exception();
         }
@@ -37,7 +37,7 @@ namespace CompactorUI.Defrag
 
             while (c < count)
             {
-                kernel32.VOLUME_BITMAP_BUFFER volumeBitmap = kernel32.GetVolumeBitmap(hVolume, startCluster >> 6);
+                Kernel32.VOLUME_BITMAP_BUFFER volumeBitmap = Kernel32.GetVolumeBitmap(hVolume, startCluster >> 6);
             }
             return null;
         }

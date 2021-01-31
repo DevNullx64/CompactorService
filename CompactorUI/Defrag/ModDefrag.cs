@@ -41,7 +41,7 @@ namespace CompactorUI.Defrag
         {
             public string File;
             public bool Moveable;
-            public List<kernel32.Extent> Extents = new List<kernel32.Extent>();
+            public List<Kernel32.Extent> Extents = new List<Kernel32.Extent>();
         }
 
         //récupère la liste des clusters du fichier File
@@ -62,7 +62,7 @@ namespace CompactorUI.Defrag
                 //pas déplacable
                 result.Moveable = false;
                 //on essaie de l'ouvrir en lecture
-                hFile = kernel32.CreateFile(File, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, kernel32.CreateFileFlag.NONE);
+                hFile = Kernel32.CreateFile(File, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, Kernel32.CreateFileFlag.NONE);
                 //si pas possible : fichier système vital
                 if (hFile.IsInvalid)
                     return result;
@@ -71,8 +71,8 @@ namespace CompactorUI.Defrag
                 //déplacable
                 result.Moveable = true;
 
-            kernel32.RETRIEVAL_POINTERS_BUFFER FileBitmap = kernel32.GetRetrievalPointers(hFile);
-            result.Extents = new List<kernel32.Extent>(FileBitmap.Extents);
+            Kernel32.RETRIEVAL_POINTERS_BUFFER FileBitmap = Kernel32.GetRetrievalPointers(hFile);
+            result.Extents = new List<Kernel32.Extent>(FileBitmap.Extents);
 
             return result;
         }
@@ -133,7 +133,7 @@ namespace CompactorUI.Defrag
                 {
                     int result = 0;
                     //on ouvre le fichier
-                    SafeFileHandle fHandle = kernel32.CreateFile(szFileName, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, kernel32.CreateFileFlag.NONE);
+                    SafeFileHandle fHandle = Kernel32.CreateFile(szFileName, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, Kernel32.CreateFileFlag.NONE);
                     if (fHandle.IsInvalid)
                     {
                         result = Marshal.GetLastWin32Error();
@@ -160,7 +160,7 @@ namespace CompactorUI.Defrag
                                 //TOCHECK : HighDWORD
                                 fClusterCount = fClusters.Extents[y].NextVcn - fPrevClusterVCN;
                                 //essaie de déplacer l'extent
-                                kernel32.MoveFile(volHandle, fHandle, fPrevClusterVCN, (uint)fClusterCount, newLCN);
+                                Kernel32.MoveFile(volHandle, fHandle, fPrevClusterVCN, (uint)fClusterCount, newLCN);
                                 //offset de l'extent que l'on vient de déplacer
                                 fPrevClusterVCN = fClusters.Extents[y].NextVcn;
                                 //avance le LCN pour placer l'extent suivant juste après celui que l'on vient de déplacer
@@ -185,7 +185,7 @@ namespace CompactorUI.Defrag
         //====================================
         //Volume : lettre du volume suivi de ":" (par ex : "C:")
         public static SafeFileHandle OpenVolume(string Volume) 
-            => kernel32.CreateFile("\\\\.\\" + Volume, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, kernel32.CreateFileFlag.NONE);
+            => Kernel32.CreateFile("\\\\.\\" + Volume, FileAccess.Read, FileShare.ReadWrite, FileMode.Open, Kernel32.CreateFileFlag.NONE);
 
         private static IList<VolumeFreeClusters>  GetExtents(IList<ulong> bitmap, int index, ref VolumeFreeClusters lastExtents)
         {
@@ -210,7 +210,7 @@ namespace CompactorUI.Defrag
         }
 
         //traite une partie de carte de clusters pour récupérer les extents libres
-        private static VolumeFreeClusters[] ProcessBitmap(kernel32.VOLUME_BITMAP_BUFFER Map)
+        private static VolumeFreeClusters[] ProcessBitmap(Kernel32.VOLUME_BITMAP_BUFFER Map)
         {
             List<VolumeFreeClusters> ret = new List<VolumeFreeClusters>();
 
@@ -283,7 +283,7 @@ namespace CompactorUI.Defrag
             if (hVol.IsInvalid)
                 return Array.Empty<VolumeFreeClusters>();
 
-            kernel32.VOLUME_BITMAP_BUFFER VolumeBitmap = kernel32.GetVolumeBitmap(hVol, 0);
+            Kernel32.VOLUME_BITMAP_BUFFER VolumeBitmap = Kernel32.GetVolumeBitmap(hVol, 0);
             //renvoie les clusters libres
             return ProcessBitmap(VolumeBitmap);
         }

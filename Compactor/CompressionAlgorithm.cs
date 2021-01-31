@@ -1,5 +1,5 @@
 ﻿using Compactor.PInvok;
-using static Compactor.PInvok.kernel32;
+using static Compactor.PInvok.Kernel32;
 
 namespace Compactor
 {

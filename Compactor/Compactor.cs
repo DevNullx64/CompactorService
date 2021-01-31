@@ -17,7 +17,7 @@ namespace Compactor
 
         public static uint GetClusterSize(DriveInfo drive)
         {
-            kernel32.GetDiskFreeSpace(drive, out uint sectorsPerCluster, out uint bytesPerSector, out _, out _);
+            Kernel32.GetDiskFreeSpace(drive, out uint sectorsPerCluster, out uint bytesPerSector, out _, out _);
             return sectorsPerCluster * bytesPerSector;
         }
         public static uint GetClusterSize(DirectoryInfo directory)
@@ -45,28 +45,35 @@ namespace Compactor
         }
 
         #region NTFS compression
-        private static SafeFileHandle CreateFile(string path, FileAccess fileAccess, kernel32.CreateFileFlag flags = kernel32.CreateFileFlag.NONE)
+        private static SafeFileHandle CreateFile(string path, FileAccess fileAccess, FileShare fileShare, Kernel32.CreateFileFlag flags = Kernel32.CreateFileFlag.NONE)
         {
             if (path.StartsWith(WindowsDirectory))
                 throw new AccessViolationException();
-            return kernel32.CreateFile(path, fileAccess, FileShare.ReadWrite, FileMode.Open, flags);
+            return Kernel32.CreateFile(path, fileAccess, fileShare, FileMode.Open, flags);
         }
-        internal static SafeFileHandle CreateFile(FileInfo fileInfo, FileAccess fileAccess)
-            => CreateFile(fileInfo.FullName, fileAccess);
+        internal static SafeFileHandle CreateFile(FileInfo fileInfo, FileAccess fileAccess, FileShare fileShare)
+            => CreateFile(fileInfo.FullName, fileAccess, fileShare);
         internal static SafeFileHandle CreateDirectory(DirectoryInfo directoryInfo, FileAccess fileAccess)
-            => CreateFile(directoryInfo.FullName, fileAccess, kernel32.CreateFileFlag.FILE_FLAG_BACKUP_SEMANTICS);
+            => CreateFile(directoryInfo.FullName, fileAccess, FileShare.ReadWrite, Kernel32.CreateFileFlag.FILE_FLAG_BACKUP_SEMANTICS);
 
-        internal static bool SetDirectoryCompression(SafeFileHandle fileHandle, kernel32.NtfsCompression algorithm)
-            => kernel32.SetCompression(fileHandle, algorithm);
-        internal static bool SetFileCompression(SafeFileHandle fileHandle, CompressionAlgorithm algorithm)
-            => algorithm.HasFlag(CompressionAlgorithm.NONE)
-            ? kernel32.DeleteExternalBacking(fileHandle) || kernel32.SetCompression(fileHandle, (kernel32.NtfsCompression)(ushort)algorithm)
-            : kernel32.SetCompression(fileHandle, kernel32.NtfsCompression.NONE) && kernel32.SetExternalBacking(fileHandle, (kernel32.WofCompressionAlgorithm)algorithm);
+        internal static void SetDirectoryCompression(SafeFileHandle fileHandle, Kernel32.NtfsCompression algorithm)
+            => Kernel32.SetCompression(fileHandle, algorithm);
+        internal static void SetFileCompression(SafeFileHandle fileHandle, CompressionAlgorithm algorithm)
+        {
+            if (algorithm.HasFlag(CompressionAlgorithm.NONE))
+            {
+                Kernel32.DeleteExternalBacking(fileHandle);
+                 Kernel32.SetCompression(fileHandle, (Kernel32.NtfsCompression)(ushort)algorithm);
+            }
+            else
+            {
+                Kernel32.SetCompression(fileHandle, Kernel32.NtfsCompression.NONE);
+                Kernel32.SetExternalBacking(fileHandle, (Kernel32.WofCompressionAlgorithm)algorithm);
+            }
+        }
 
         public static bool SetCompression(FileInfo fileInfo, CompressionAlgorithm algorithm, uint clusterSize, double minCompression = 1)
         {
-            bool result = true;
-
             if (fileInfo.Length > clusterSize)
             {
                 bool ro = fileInfo.Attributes.HasFlag(FileAttributes.ReadOnly);
@@ -74,23 +81,25 @@ namespace Compactor
                 try
                 {
                     if (algorithm.HasFlag(CompressionAlgorithm.NONE))
-                        using (SafeFileHandle fHandle = CreateFile(fileInfo, FileAccess.ReadWrite))
-                            result = SetFileCompression(fHandle, algorithm);
+                        using (SafeFileHandle fHandle = CreateFile(fileInfo, FileAccess.ReadWrite, FileShare.None))
+                            SetFileCompression(fHandle, algorithm);
                     else
                     {
                         if (fileInfo.Attributes.HasFlag(FileAttributes.Compressed))
-                            using (SafeFileHandle fHandle = CreateFile(fileInfo, FileAccess.ReadWrite))
-                                kernel32.SetCompression(fHandle, kernel32.NtfsCompression.NONE);
-                        using (SafeFileHandle fHandle = CreateFile(fileInfo, FileAccess.Read))
-                            if (result = SetFileCompression(fHandle, algorithm))
-                                if (algorithm != CompressionAlgorithm.NONE)
-                                    if (LengthOnDisk(kernel32.GetCompressedFileLength(fileInfo.FullName), clusterSize) / (double)LengthOnDisk(fileInfo.Length, clusterSize) > minCompression)
-                                        result = SetFileCompression(fHandle, CompressionAlgorithm.NONE);
+                            using (SafeFileHandle fHandle = CreateFile(fileInfo, FileAccess.ReadWrite, FileShare.None))
+                                Kernel32.SetCompression(fHandle, Kernel32.NtfsCompression.NONE);
+                        using (SafeFileHandle fHandle = CreateFile(fileInfo, FileAccess.Read, FileShare.None))
+                        {
+                            SetFileCompression(fHandle, algorithm);
+                            if (algorithm != CompressionAlgorithm.NONE)
+                                if (LengthOnDisk(Kernel32.GetCompressedFileLength(fileInfo.FullName), clusterSize) / (double)LengthOnDisk(fileInfo.Length, clusterSize) > minCompression)
+                                    SetFileCompression(fHandle, CompressionAlgorithm.NONE);
+                        }
                     }
                 }
-                catch(Exception e)
+                catch (Exception e)
                 {
-                    result = false;
+                    return false;
                 }
                 finally
                 {
@@ -98,17 +107,17 @@ namespace Compactor
                 }
             }
 
-            return result;
+            return true;
         }
         public static bool SetCompression(FileInfo fileInfo, CompressionAlgorithm algorithm, double minCompression = 1)
             => SetCompression(fileInfo, algorithm, GetClusterSize(fileInfo), minCompression);
 
-        public static bool SetCompression(DirectoryInfo directoryInfo, CompressionAlgorithm algorithm)
+        public static void SetCompression(DirectoryInfo directoryInfo, CompressionAlgorithm algorithm)
         {
             using (SafeFileHandle directoryHandle = CreateDirectory(directoryInfo, FileAccess.ReadWrite))
-                return SetDirectoryCompression(
+                SetDirectoryCompression(
                     directoryHandle,
-                    (algorithm == CompressionAlgorithm.NONE) ? kernel32.NtfsCompression.NONE : kernel32.NtfsCompression.LZNT1);
+                    (algorithm == CompressionAlgorithm.NONE) ? Kernel32.NtfsCompression.NONE : Kernel32.NtfsCompression.LZNT1);
         }
 
         public class ThreaParameter

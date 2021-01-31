@@ -1,4 +1,5 @@
-﻿using Compactor;
+﻿//#define LOG
+using Compactor;
 using Microsoft.Win32;
 using System;
 using System.Collections.Concurrent;
@@ -17,9 +18,46 @@ namespace CompactorService
 {
     public partial class Service : ServiceBase
     {
-        private static readonly Dictionary<char, object> Lockers = new Dictionary<char, object>();
-        private static readonly ConcurrentDictionary<string, CompressionAlgorithm> FileToTread = new ConcurrentDictionary<string, CompressionAlgorithm>();
-        private static bool Continue = true;
+#if LOG
+        private static readonly StreamWriter log = new StreamWriter(new FileStream("C:\\log.txt", FileMode.Create, FileAccess.Write, FileShare.Read));
+
+        protected static void WriteLog(string fncName, string message)
+        {
+            lock (log)
+            {
+                log.WriteLine(DateTime.Now.ToString() + " " + fncName + "(): " + message);
+                log.Flush();
+            }
+        }
+
+        protected static void WriteLog(string fncName, Exception exception)
+        {
+            WriteLog(fncName, exception.Message);
+        }
+#endif
+
+        private class FileToTreadInfo
+        {
+            public readonly CompressionAlgorithm Algorithm;
+            public long Ticks;
+
+            public FileToTreadInfo(CompressionAlgorithm algorithm)
+            {
+                Algorithm = algorithm;
+                Ticks = DateTime.Now.Ticks;
+            }
+        }
+
+        private static readonly Dictionary<string, FileToTreadInfo> FileToTread = new Dictionary<string, FileToTreadInfo>();
+
+        private static bool Compact(DirectoryInfo directoryInfo, CompressionAlgorithm algorithm)
+        {
+            Compactor.Compactor.SetCompression(directoryInfo, algorithm);
+#if LOG
+            WriteLog(nameof(Compact), directoryInfo.FullName + " => " + algorithm.ToString());
+#endif
+            return true;
+        }
 
         private static bool Compact(FileInfo fileInfo, CompressionAlgorithm algorithm)
         {
@@ -36,41 +74,68 @@ namespace CompactorService
                     if (Compactor.Compactor.SetCompression(fileInfo, algorithm))
                     {
                         fileInfo.Attributes &= ~FileAttributes.Archive;
+#if LOG
+                        WriteLog(nameof(Compact), fileInfo.FullName + " => " + algorithm.ToString());
+#endif
                         return true;
                     }
                     else
+                    {
+#if LOG
+                        WriteLog(nameof(Compact), fileInfo.FullName + " => Error");
+#endif
                         return false;
+                    }
                 }
             }
         }
-        private static bool Compact(string fileName, CompressionAlgorithm algorithm)
-            => Compact(new FileInfo(fileName), algorithm);
+        private static bool Compact(string path, CompressionAlgorithm algorithm)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    Compactor.Compactor.SetCompression(new DirectoryInfo(path),
+                        (algorithm == CompressionAlgorithm.LZNT1)
+                        ? CompressionAlgorithm.LZNT1
+                        : CompressionAlgorithm.NONE);
+                    return true;
+                }
+                else
+                    return Compact(new FileInfo(path), algorithm);
+            }
+            catch (Exception e)
+            {
+#if LOG
+                WriteLog(nameof(Compact), e);
+#endif
+                return false;
+            }
+        }
 
         private class Watcher : IDisposable
         {
-            private Thread InitialisationThread;
+            private Thread InitialisationThread = null;
             private bool Enabled_ = false;
             public string PathName => watcher.Path;
             public bool SubFolder => watcher.IncludeSubdirectories;
             public readonly CompressionAlgorithm Algorithm;
+            public bool IsInitializing => InitialisationThread is object;
 
-            private void Initialise(DirectoryInfo directory)
+            private void Initialise(string directory)
             {
-                Compactor.Compactor.SetCompression(directory,
-                    (Algorithm == CompressionAlgorithm.LZNT1)
-                    ? CompressionAlgorithm.LZNT1
-                    : CompressionAlgorithm.NONE);
-                foreach (DirectoryInfo subDirectory in directory.EnumerateDirectories())
-                    if (Continue)
-                        Initialise(subDirectory);
-                    else return;
-                foreach (FileInfo filename in directory.EnumerateFiles())
-                    if (Continue)
-                        Compact(filename, Algorithm);
-                    else return;
+                if (Directory.Exists(directory))
+                {
+                    foreach (string subDirectory in Directory.EnumerateDirectories(directory))
+                        if (Enabled_)
+                            Initialise(subDirectory);
+                        else return;
+                    foreach (string filename in Directory.EnumerateFiles(directory))
+                        if (Enabled_)
+                            Compact(filename, Algorithm);
+                        else return;
+                }
             }
-            private void Initialise(string path)
-                => Initialise(new DirectoryInfo(path));
 
             public bool Enabled
             {
@@ -80,22 +145,37 @@ namespace CompactorService
                     if (Enabled_ != value)
                     {
                         Enabled_ = value;
-                        watcher.EnableRaisingEvents = Enabled_;
                         if (Enabled_)
-                            (InitialisationThread =
-                            new Thread(() =>
+                        {
+                            InitialisationThread = new Thread(() =>
                             {
-                                Initialise(watcher.Path);
-                                InitialisationThread = null;
+                                try
+                                {
+#if LOG
+                                    WriteLog(nameof(InitialisationThread), watcher.Path + " intializing...");
+#endif
+                                    Initialise(watcher.Path);
+                                    watcher.EnableRaisingEvents = Enabled_;
+                                    InitialisationThread = null;
+#if LOG
+                                    WriteLog(nameof(InitialisationThread), watcher.Path + " intialized");
+#endif
+                                }
+                                catch (Exception e)
+                                {
+#if LOG
+                                    WriteLog(nameof(InitialisationThread), watcher.Path + " Error\n" + e.Message);
+#endif
+                                }
                             })
-                            { Priority = ThreadPriority.Lowest })
-                            .Start();
+                            { Priority = ThreadPriority.Lowest };
+                            InitialisationThread.Start();
+                        }
                     }
                 }
             }
 
             private readonly FileSystemWatcher watcher;
-            private bool disposedValue;
 
             public Watcher(string pathName, bool subFolder, CompressionAlgorithm algorithm)
             {
@@ -106,19 +186,87 @@ namespace CompactorService
                     Path = pathName,
                     Filter = "*.*",
                     IncludeSubdirectories = subFolder,
-                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+                    NotifyFilter =
+                        NotifyFilters.Attributes |
+                        NotifyFilters.LastWrite |
+                        NotifyFilters.Size |
+                        NotifyFilters.FileName |
+                        NotifyFilters.DirectoryName,
                     EnableRaisingEvents = Enabled_
                 };
-                FileSystemEventHandler onChanged = new FileSystemEventHandler(OnChanged);
-                watcher.Changed += onChanged;
-                watcher.Created += onChanged;
-
-                if (!Lockers.ContainsKey(pathName[0]))
-                    Lockers.Add(pathName[0], new object());
+                watcher.Created += OnCreatedOdChanged;
+                watcher.Changed += OnCreatedOdChanged;
+                watcher.Renamed += OnRenamed;
+                watcher.Deleted += OnDelete;
             }
 
-            private void OnChanged(object sender, FileSystemEventArgs e)
-                => FileToTread.TryAdd(e.FullPath, Algorithm);
+            private void OnCreatedOdChanged(object sender, FileSystemEventArgs e)
+            {
+                try
+                {
+#if LOG
+                    WriteLog(nameof(OnCreatedOdChanged), e.FullPath);
+#endif
+                    lock (FileToTread)
+                        if (FileToTread.TryGetValue(e.FullPath, out FileToTreadInfo info))
+                            info.Ticks = DateTime.Now.Ticks;
+                        else
+                            FileToTread.Add(e.FullPath, new FileToTreadInfo(Algorithm));
+                }
+                catch (Exception ex)
+                {
+#if LOG
+                    WriteLog(nameof(OnCreatedOdChanged), ex);
+#endif
+                    throw ex;
+                }
+            }
+            private void OnRenamed(object sender, RenamedEventArgs e)
+            {
+                try
+                {
+#if LOG
+                    WriteLog(nameof(OnRenamed), e.OldFullPath + " => " + e.FullPath);
+#endif
+                    lock (FileToTread)
+                    {
+                        if (FileToTread.TryGetValue(e.OldFullPath, out FileToTreadInfo info))
+                        {
+                            FileToTread.Remove(e.OldFullPath);
+                            info.Ticks = DateTime.Now.Ticks;
+                            FileToTread.Add(e.FullPath, info);
+                        }
+                        else
+                            FileToTread.Add(e.FullPath, new FileToTreadInfo(Algorithm));
+                    }
+                }
+                catch (Exception ex)
+                {
+#if LOG
+                    WriteLog(nameof(OnRenamed), ex);
+#endif
+                    throw ex;
+                }
+            }
+            private void OnDelete(object sender, FileSystemEventArgs e)
+            {
+                try
+                {
+#if LOG
+                    WriteLog(nameof(OnDelete), e.FullPath);
+#endif
+                    lock (FileToTread)
+                        if (FileToTread.TryGetValue(e.FullPath, out FileToTreadInfo info))
+                            FileToTread.Remove(e.FullPath);
+                }
+                catch (Exception ex)
+                {
+#if LOG
+                    WriteLog(nameof(OnDelete), ex);
+#endif
+                    throw ex;
+                }
+            }
 
             public void Set(RegistryKey key, int i)
             {
@@ -127,6 +275,7 @@ namespace CompactorService
                 key.SetValue($"{watcher}.SubFolder", SubFolder);
                 key.SetValue($"{watcher}.Algorithm", Algorithm);
             }
+
             public static Watcher Get(RegistryKey key, int i)
             {
                 string watcher = "Watcher" + i.ToString();
@@ -139,6 +288,7 @@ namespace CompactorService
                 return null;
             }
 
+            private bool disposedValue;
             protected virtual void Dispose(bool disposing)
             {
                 if (!disposedValue)
@@ -147,7 +297,7 @@ namespace CompactorService
                     {
                         Enabled = false;
                         Thread init = InitialisationThread;
-                        if (init != null)
+                        if (init is object && init.IsAlive)
                             init.Join();
                         watcher.Dispose();
                     }
@@ -169,60 +319,115 @@ namespace CompactorService
             InitializeComponent();
         }
 
-        private Thread ProcessingThread;
+        private Thread ProcessingThread = null;
 
+        private const int us_Ticks = 10;
+        private const int ms_Ticks = 1000 * us_Ticks;
+        private const int s_Ticks = 1000 * ms_Ticks;
+        bool Continue = true;
         internal void Process()
         {
-            using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SYSTEM\CurrentControlSet\Services\" + ServiceName))
+            try
             {
-                Watcher watcher;
-#if DEBUG
-                watcher = new Watcher(@"D:\Games\", true, CompressionAlgorithm.LZX);
-                watcher.Set(key, 1);
+                using (RegistryKey key = Registry.LocalMachine.CreateSubKey(@"SYSTEM\CurrentControlSet\Services\" + ServiceName))
+                {
+                    Watcher watcher;
+
+                    int i = 0;
+                    while ((watcher = Watcher.Get(key, ++i)) is object)
+                    {
+                        watchers.Add(watcher);
+                        watcher.Enabled = true;
+                    }
+
+                    key.Close();
+
+                    if (i == 1)
+                        return;
+                }
+
+                ProcessingThread = new Thread(() =>
+                {
+                    try
+                    {
+                        while (Continue)
+                        {
+                            List<KeyValuePair<string, FileToTreadInfo>> toTreats;
+                            long ticks = DateTime.Now.Ticks;
+                            lock (FileToTread)
+                                toTreats = FileToTread.Where(e => (ticks - e.Value.Ticks) > 60 * s_Ticks).ToList();
+
+                            if (toTreats.Count == 0)
+                                Thread.Sleep(1000);
+                            else
+                            {
+                                foreach (var toTreat in toTreats)
+                                    if (Compact(toTreat.Key, toTreat.Value.Algorithm))
+                                        toTreat.Value.Ticks = long.MaxValue;
+
+                                lock (FileToTread)
+                                    foreach (string key in toTreats.Where(e => e.Value.Ticks == long.MaxValue).Select(e => e.Key))
+                                        FileToTread.Remove(key);
+                            }
+                        }
+                        ProcessingThread = null;
+                    }
+                    catch (Exception e)
+                    {
+#if LOG
+                        WriteLog(nameof(ProcessingThread), e);
 #endif
-
-                int i = 0;
-                while ((watcher = Watcher.Get(key, ++i)) is object)
-                {
-                    watchers.Add(watcher);
-                    watcher.Enabled = true;
-                }
-
-                key.Close();
-
-                if (i == 1)
-                    return;
+                    }
+                })
+                { Priority = ThreadPriority.BelowNormal };
+                ProcessingThread.Start();
             }
-
-            (ProcessingThread =
-                new Thread(() =>
+            catch (Exception e)
             {
-                while (Continue)
-                {
-                    foreach (var toTreat in FileToTread)
-                        if (Compact(toTreat.Key, toTreat.Value))
-                            FileToTread.TryRemove(toTreat.Key, out _);
-                    Thread.Sleep(1000);
-                }
-            })
-                { Priority = ThreadPriority.BelowNormal })
-            .Start();
+#if LOG
+                WriteLog(nameof(Process), e);
+#endif
+                throw e;
+            }
         }
 
         protected override void OnStart(string[] args)
         {
+#if LOG
+            WriteLog(nameof(OnStart), "Start service");
+#endif
             Process();
         }
 
         protected override void OnStop()
         {
-            Continue = false;
-            foreach (Watcher watcher in watchers)
-                watcher.Enabled = false;
-            
-            foreach (Watcher watcher in watchers)
-                watcher.Dispose();
-            ProcessingThread.Join();
+#if LOG
+            WriteLog(nameof(OnStop), "Stoping service...");
+#endif
+            try
+            {
+                Continue = false;
+                foreach (Watcher watcher in watchers)
+                    watcher.Enabled = false;
+
+                foreach (Watcher watcher in watchers)
+                    watcher.Dispose();
+
+                Thread process = ProcessingThread;
+                if (process is object && process.IsAlive)
+                    ProcessingThread.Join();
+#if LOG
+                WriteLog(nameof(OnStop), "Stoped");
+                log.Close();
+#endif
+            }
+            catch (Exception e)
+            {
+#if LOG
+                WriteLog(nameof(OnStop), e);
+#endif
+                throw e;
+            }
         }
     }
 }

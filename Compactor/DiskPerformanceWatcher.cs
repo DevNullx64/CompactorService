@@ -21,9 +21,8 @@ namespace Compactor
 
         private readonly System.Diagnostics.PerformanceCounter diskPerformance;
         private readonly Thread Refresher;
-        private float[] Samples = new float[RefreshSample];
+        private readonly float[] Samples = new float[RefreshSample];
         private int iSamples = 0;
-        private float Average_ = 0.0f;
 
         private void Refresh()
         {
