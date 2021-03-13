@@ -112,13 +112,17 @@ namespace Compactor
         public static bool SetCompression(FileInfo fileInfo, CompressionAlgorithm algorithm, double minCompression = 1)
             => SetCompression(fileInfo, algorithm, GetClusterSize(fileInfo), minCompression);
 
-        public static void SetCompression(DirectoryInfo directoryInfo, CompressionAlgorithm algorithm)
+        public static void SetCompression(DirectoryInfo directoryInfo, Kernel32.NtfsCompression algorithm)
         {
             using (SafeFileHandle directoryHandle = CreateDirectory(directoryInfo, FileAccess.ReadWrite))
-                SetDirectoryCompression(
-                    directoryHandle,
-                    (algorithm == CompressionAlgorithm.NONE) ? Kernel32.NtfsCompression.NONE : Kernel32.NtfsCompression.LZNT1);
+                SetDirectoryCompression(directoryHandle, algorithm);
         }
+        public static void SetCompression(DirectoryInfo directoryInfo, CompressionAlgorithm algorithm)
+            => SetCompression(
+                directoryInfo,
+                (algorithm == CompressionAlgorithm.NONE)
+                ? Kernel32.NtfsCompression.NONE
+                : Kernel32.NtfsCompression.LZNT1);
 
         public class ThreaParameter
         {
